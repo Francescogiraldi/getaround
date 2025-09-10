@@ -1,3 +1,14 @@
+---
+title: Getaround Analytics Dashboard
+emoji: 🚗
+colorFrom: purple
+colorTo: pink
+sdk: streamlit
+sdk_version: "1.29.0"
+app_file: app.py
+pinned: false
+---
+
 # 🚗 Getaround Analytics Dashboard
 
 A comprehensive Streamlit dashboard for analyzing Getaround rental data, featuring interactive visualizations, buffer threshold simulations, and key performance indicators.

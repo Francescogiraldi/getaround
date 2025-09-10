@@ -151,14 +151,23 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# Load dataset with modern loading states
-@st.cache_data
+# Optimized data loading with better caching and error handling
+@st.cache_data(ttl=3600)  # Cache for 1 hour
 def load_data():
-    """Load and cache the rental data with modern loading indicators."""
+    """Load and cache the rental data with optimized performance."""
     try:
-        with st.spinner('🔄 Loading rental data...'):
-            df = pd.read_csv("processed_delay_getaround_data.csv")
-            return df
+        # Use more efficient CSV reading with specific dtypes
+        df = pd.read_csv(
+            "processed_delay_getaround_data.csv",
+            dtype={
+                'checkin_type': 'category',
+                'state': 'category',
+                'delay_at_checkout_in_minutes': 'float32',
+                'time_delta_with_previous_rental_in_minutes': 'float32'
+            },
+            parse_dates=False  # Skip date parsing if not needed
+        )
+        return df
     except FileNotFoundError:
         st.error("🚫 **Data file not found!** Please ensure 'processed_delay_getaround_data.csv' exists in the current directory.")
         st.info("💡 **Tip:** Run the data processing script first to generate the required CSV file.")
@@ -238,15 +247,23 @@ with col_refresh:
         st.cache_data.clear()
         st.rerun()
 
-# Apply filters
-if checkin_filter != "both":
-    df_filtered = df[df["type"] == checkin_filter]
-else:
-    df_filtered = df.copy()
+# Optimized data filtering with caching
+@st.cache_data
+def filter_data(df, checkin_filter):
+    """Apply filters and return processed dataframes."""
+    if checkin_filter != "both":
+        df_filtered = df[df["type"] == checkin_filter].copy()
+    else:
+        df_filtered = df.copy()
+    
+    # Pre-compute filtered datasets
+    df_ended = df_filtered[df_filtered["state"] == "ended"]
+    df_positive_delay = df_ended[df_ended["delay"].notna() & (df_ended["delay"] > 0)]
+    
+    return df_filtered, df_ended, df_positive_delay
 
-# Filter ended rentals for metrics
-df_ended = df_filtered[df_filtered["state"] == "ended"]
-df_positive_delay = df_ended[df_ended["delay"].notna() & (df_ended["delay"] > 0)]
+# Apply filters with caching
+df_filtered, df_ended, df_positive_delay = filter_data(df, checkin_filter)
 
 # Modern Metrics Display with Cards
 st.markdown("""
@@ -345,21 +362,30 @@ with col_slider2:
     </div>
     """, unsafe_allow_html=True)
 
-# Filter datasets for analysis
-df_buffer = df_filtered[df_filtered["time_delta"].notna()]
-df_critical = df_filtered.dropna(subset=["delay", "time_delta"])
-df_critical = df_critical[df_critical["delay"] > df_critical["time_delta"]]
-df_canceled = df_filtered[(df_filtered["state"] == "canceled") & (df_filtered["time_delta"].notna())]
+# Optimized buffer analysis with caching
+@st.cache_data
+def compute_buffer_metrics(df_filtered, threshold):
+    """Compute buffer threshold metrics efficiently."""
+    # Pre-filter datasets once
+    df_buffer = df_filtered[df_filtered["time_delta"].notna()]
+    df_critical = df_filtered.dropna(subset=["delay", "time_delta"])
+    df_critical = df_critical[df_critical["delay"] > df_critical["time_delta"]]
+    df_canceled = df_filtered[(df_filtered["state"] == "canceled") & (df_filtered["time_delta"].notna())]
+    
+    # Compute metrics efficiently
+    total_rentals = len(df_filtered)
+    affected_pct = 100 * (df_buffer["time_delta"] < threshold).sum() / total_rentals if total_rentals > 0 else 0
+    
+    total_critical = len(df_critical)
+    solved_pct = 100 * (df_critical["time_delta"] < threshold).sum() / total_critical if total_critical > 0 else 0
+    
+    total_canceled = len(df_canceled)
+    canceled_pct = 100 * (df_canceled["time_delta"] < threshold).sum() / total_canceled if total_canceled > 0 else 0
+    
+    return affected_pct, solved_pct, canceled_pct
 
-# Compute metrics
-total_rentals = len(df_filtered)
-affected_pct = 100 * (df_buffer["time_delta"] < threshold).sum() / total_rentals
-
-total_critical = len(df_critical)
-solved_pct = 100 * (df_critical["time_delta"] < threshold).sum() / total_critical if total_critical else 0
-
-total_canceled = len(df_canceled)
-canceled_pct = 100 * (df_canceled["time_delta"] < threshold).sum() / total_canceled if total_canceled else 0
+# Compute metrics with caching
+affected_pct, solved_pct, canceled_pct = compute_buffer_metrics(df_filtered, threshold)
 
 # Modern Results Display
 st.markdown("""
@@ -399,50 +425,58 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
-# Create modern Plotly chart
-labels = ["Rentals Affected", "Critical Cases Solved", "Cancellations Preventable"]
-values = [affected_pct, solved_pct, canceled_pct]
-colors = ["#aa1ba3", "#cc66cc", "#e699e6"]
-
-fig = go.Figure(data=[
-    go.Bar(
-        x=labels,
-        y=values,
-        marker_color=colors,
-        text=[f"{v:.1f}%" for v in values],
-        textposition='outside',
-        textfont=dict(size=14, color='#262730'),
-        hovertemplate='<b>%{x}</b><br>Impact: %{y:.1f}%<extra></extra>'
+# Optimized Plotly chart with better performance
+@st.cache_data
+def create_impact_chart(affected_pct, solved_pct, canceled_pct, threshold):
+    """Create optimized impact analysis chart."""
+    labels = ["Rentals Affected", "Critical Cases Solved", "Cancellations Preventable"]
+    values = [affected_pct, solved_pct, canceled_pct]
+    colors = ["#aa1ba3", "#cc66cc", "#e699e6"]
+    
+    fig = go.Figure(data=[
+        go.Bar(
+            x=labels,
+            y=values,
+            marker_color=colors,
+            text=[f"{v:.1f}%" for v in values],
+            textposition='outside',
+            textfont=dict(size=14, color='#262730'),
+            hovertemplate='<b>%{x}</b><br>Impact: %{y:.1f}%<extra></extra>'
+        )
+    ])
+    
+    fig.update_layout(
+        title={
+            'text': f"Impact Analysis: {threshold}-minute Buffer Threshold",
+            'x': 0.5,
+            'xanchor': 'center',
+            'font': {'size': 18, 'color': '#aa1ba3'}
+        },
+        xaxis={
+            'title': '',
+            'tickfont': {'size': 12, 'color': '#262730'}
+        },
+        yaxis={
+            'title': {'text': 'Impact Percentage (%)', 'font': {'size': 14, 'color': '#262730'}},
+            'range': [0, max(values) * 1.2] if values else [0, 100],
+            'tickfont': {'size': 12, 'color': '#262730'}
+        },
+        plot_bgcolor='rgba(0,0,0,0)',
+        paper_bgcolor='rgba(0,0,0,0)',
+        font={'family': 'Arial, sans-serif'},
+        margin=dict(t=80, b=60, l=60, r=60),
+        height=400,
+        showlegend=False  # Disable legend for better performance
     )
-])
+    
+    fig.update_xaxes(showgrid=False)
+    fig.update_yaxes(showgrid=True, gridwidth=1, gridcolor='rgba(0,0,0,0.1)')
+    
+    return fig
 
-fig.update_layout(
-    title={
-        'text': f"Impact Analysis: {threshold}-minute Buffer Threshold",
-        'x': 0.5,
-        'xanchor': 'center',
-        'font': {'size': 18, 'color': '#aa1ba3'}
-    },
-    xaxis={
-        'title': '',
-        'tickfont': {'size': 12, 'color': '#262730'}
-    },
-    yaxis={
-        'title': {'text': 'Impact Percentage (%)', 'font': {'size': 14, 'color': '#262730'}},
-        'range': [0, max(values) * 1.2],
-        'tickfont': {'size': 12, 'color': '#262730'}
-    },
-    plot_bgcolor='rgba(0,0,0,0)',
-    paper_bgcolor='rgba(0,0,0,0)',
-    font={'family': 'Arial, sans-serif'},
-    margin=dict(t=80, b=60, l=60, r=60),
-    height=400
-)
-
-fig.update_xaxes(showgrid=False)
-fig.update_yaxes(showgrid=True, gridwidth=1, gridcolor='rgba(0,0,0,0.1)')
-
-st.plotly_chart(fig, use_container_width=True)
+# Create and display chart
+fig = create_impact_chart(affected_pct, solved_pct, canceled_pct, threshold)
+st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})  # Hide toolbar for cleaner UI
 
 # Additional insights
 st.markdown("""
